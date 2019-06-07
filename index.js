@@ -2,6 +2,16 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const app = express();
 
+// Optionally used to retrieve additional FHIR data
+const axios = require('axios'); 
+const fhir = require('fhir.js');
+
+// Optionaly used to verify tokens
+const jsrJWT = require('jsrsasign');
+const jwt = require('jsonwebtoken'); 
+const jwkToPem = require('jwk-to-pem');
+
+
 // This is necessary middleware to parse JSON into the incoming request body for POST requests
 app.use(bodyParser.json());
 
@@ -10,7 +20,7 @@ app.use(bodyParser.json());
  * - CDS Services must implement CORS in order to be called from a web browser
  */
 app.use((request, response, next) => {
-  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Origin', 'https://sandbox.cds-hooks.org');
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   response.setHeader('Access-Control-Allow-Credentials', 'true');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -33,7 +43,7 @@ app.use((request, response, next) => {
   }
 
   const serviceHost = request.get('Host');
-  const authorizationHeader = request.get('Authorization') || 'Bearer open'; // Default a token until ready to enable auth.
+  const authorizationHeader = request.get('Authorization');
 
   if (!authorizationHeader || !authorizationHeader.startsWith('Bearer')) {
     response.set('WWW-Authenticate', `Bearer realm="${serviceHost}", error="invalid_token", error_description="No Bearer token provided."`)
@@ -43,9 +53,52 @@ app.use((request, response, next) => {
   const token = authorizationHeader.replace('Bearer ', '');
   const aud = `${request.protocol}://${serviceHost}${request.originalUrl}`;
 
-  const isValid = true; // Verify token validity per https://cds-hooks.org/specification/1.0/#trusting-cds-client
+  const publicKeySet = {
+    "keys": [
+      {
+        "kty": "EC",
+        "use": "sig",
+        "crv": "P-384",
+        "kid": "44823f3d-0b01-4a6c-a80e-b9d3e8a7226f",
+        "x": "dw_JGR8nB2I6XveNxUOl2qk699ZPLM2nYI5STSdiEl9avAkrm3CkfYMbrrjr8laB",
+        "y": "Sm3mLE-n1zYNla_aiE3cb3nZsL51RbC7ysw3q8aJLxGm-hx79RPMYpITDjp7kgzy",
+        "alg": "ES384"
+      }
+    ]
+  };
 
-  if (!isValid) {
+  // Verification via jsrassign
+  //////////////////////////////
+  // const key = jsrJWT.KEYUTIL.getKey(publicKeySet.keys[0]);
+
+  // const isValid = jsrJWT.jws.JWS.verifyJWT(token, key, {
+  //   alg: ['ES384', 'RS384'],
+  //   iss: ['https://sandbox.cds-hooks.org'],
+  //   aud: [aud],
+  //   gracePeriod: 5 * 60  // accept 5 minutes grace period
+  // });
+
+  // if (!isValid) {
+  //   response.set('WWW-Authenticate', `Bearer realm="${serviceHost}", error="invalid_token", error_description="The token is invalid."`)
+  //   return response.status(401).end();
+  // }
+
+  //Verification via jsonwebtoken and jwk-to-pem
+  //////////////////////////////
+
+  const pem = jwkToPem(publicKeySet.keys[0]);
+  const options = {
+    algorithms: ['ES384', 'RS384'],
+    audience: aud,
+    issuer: ['https://sandbox.cds-hooks.org'],
+    clockTolerance:  5 * 60 // accept 5 minutes grace period
+  };
+
+  try {
+    const decoded = jwt.verify(token, pem, options);
+    console.log("decoded: " + JSON.stringify(decoded, null, 2));
+  } catch (err) {
+    console.log("error: " + err);
     response.set('WWW-Authenticate', `Bearer realm="${serviceHost}", error="invalid_token", error_description="The token is invalid."`)
     return response.status(401).end();
   }
@@ -75,6 +128,13 @@ app.get('/cds-services', (request, response) => {
     }
   };
 
+  const patientViewHypertension = {
+    hook: 'patient-view',
+    id: 'patient-view-hypertension',
+    title: 'Example patient-view CDS Service for hypertension',
+    description: 'Returns a warning if the patient has hypertension'
+  };
+
   // Example service to invoke the order-select hook
   const orderSelectExample = {
     hook: 'order-select',
@@ -84,7 +144,7 @@ app.get('/cds-services', (request, response) => {
   };
 
   const discoveryEndpointServices = {
-    services: [ patientViewExample, orderSelectExample ]
+    services: [ patientViewExample, patientViewHypertension, orderSelectExample ]
   };
   response.send(JSON.stringify(discoveryEndpointServices, null, 2));
 });
@@ -100,11 +160,13 @@ app.post('/cds-services/patient-view-example', (request, response) => {
 
   // Parse the request body for the Patient prefetch resource
   const patientResource = request.body.prefetch.requestedPatient;
+
   const patientViewCard = {
     cards: [
       {
         // Use the patient's First and Last name
         summary: 'Now seeing: ' + patientResource.name[0].given[0] + ' ' + patientResource.name[0].family[0],
+        detail: 'Patient birthdate: ' + patientResource.birthDate,
         indicator: 'info',
         source: {
           label: 'CDS Service Tutorial',
@@ -115,12 +177,50 @@ app.post('/cds-services/patient-view-example', (request, response) => {
             label: 'Learn more about CDS Hooks',
             url: 'http://cds-hooks.org',
             type: 'absolute'
+          },
+          {
+            label: 'Launch SMART App!',
+            url: 'https://engineering.cerner.com/smart-on-fhir-tutorial/example-smart-app/launch.html', // https://dennispatterson.github.io/smart-on-fhir-tutorial/example-smart-app/launch.html
+            type: 'smart'
           }
         ]
       }
     ]
   };
   response.send(JSON.stringify(patientViewCard, null, 2));
+});
+
+/**
+ * Return a warning card if the patient has hypertension.
+ */
+app.post('/cds-services/patient-view-hypertension', (request, response) => {
+  
+  const fhirServer = request.body.fhirServer;
+  const patientId = request.body.context.patientId;
+  const fhirAuthorization = request.body.fhirAuthorization;
+
+  retrieveHypertensionConditionsFhirJs(fhirServer, patientId, fhirAuthorization)
+    .then((conditionsBundle) => {
+      if (conditionsBundle.entry && conditionsBundle.entry.length && conditionsBundle.entry[0].resource.resourceType == 'Condition') {
+
+        const condition = conditionsBundle.entry[0].resource;
+        const patientHypertensionCard = {
+          cards: [
+            {
+              summary: 'Existing condition: ' + condition.code.text,
+              indicator: 'warning',
+              source: {
+                label: 'CDS Service Tutorial',
+                url: 'https://github.com/cerner/cds-services-tutorial/wiki/Exercises'
+              }
+            }
+          ]
+        };
+        response.send(JSON.stringify(patientHypertensionCard, null, 2));
+      }
+    });
+
+  response.status(200);
 });
 
 /**
@@ -146,6 +246,66 @@ app.post('/cds-services/order-select-example', (request, response) => {
   }
   response.status(200);
 });
+
+// Example Conditions query - https://api.hspconsortium.org/cdshooksdstu2/open/Condition?patient=SMART-1288992&code=http://snomed.info/sct|1201005
+// Example Conditions query - https://launch.smarthealthit.org/v/r2/fhir/Condition?patient=smart-1288992&code=http://snomed.info/sct|1201005
+// Default patient with hypertension - SMART-1288992
+// Alternate patient w/o hypertension - SMART-7321938
+
+function retrieveHypertensionConditionsAxios(fhirServer, patientId, fhirAuthorization) {
+
+  const headers = { Accept: 'application/json+fhir' };
+  if (fhirAuthorization && fhirAuthorization.access_token) {
+    headers.Authorization = `Bearer ${fhirAuthorization.access_token}`;
+  }
+
+  return axios.get('/Condition', {
+    baseURL: fhirServer,
+    params: {
+      patient: patientId,
+      code: 'http://snomed.info/sct|1201005'
+    },
+    headers: headers,
+    timeout: 2000
+  }).then((result) => {
+    if (result.data && result.data.resourceType && result.data.resourceType === 'Bundle') {
+      return result.data;
+    }
+    console.log('Response did not include Bundle');
+  }).catch((error) => {
+    console.log('Error querying for Conditions: ' + error);
+  });
+}
+
+function retrieveHypertensionConditionsFhirJs(fhirServer, patientId, fhirAuthorization) {
+
+  var config = {
+    baseUrl: fhirServer
+  }
+
+  if (fhirAuthorization && fhirAuthorization.access_token) {
+    config.auth = {bearer: fhirAuthorization.access_token}
+  }
+
+  const client = fhir(config);
+
+  return client
+    .search( {type: 'Condition', query: { 'patient': patientId, code: 'http://snomed.info/sct|1201005' }})
+    .then(function(res){
+        return res.data;
+    })
+    .catch(function(res){
+        //Error responses
+        if (res.status){
+            console.log('Error', res.status);
+        }
+
+        //Errors
+        if (res.message){
+            console.log('Error', res.message);
+        }
+    });
+}
 
 /**
  * Creates a Card array based upon the medication chosen by the provider in the request context
