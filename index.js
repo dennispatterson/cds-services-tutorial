@@ -53,6 +53,8 @@ app.use((request, response, next) => {
   const token = authorizationHeader.replace('Bearer ', '');
   const aud = `${request.protocol}://${serviceHost}${request.originalUrl}`;
 
+  console.log(`Token for '${aud}' => ${token}\n`);
+
   const publicKeySet = {
     "keys": [
       {
