@@ -247,10 +247,17 @@ app.post('/cds-services/order-select-example', (request, response) => {
   response.status(200);
 });
 
-// Example Conditions query - https://api.hspconsortium.org/cdshooksdstu2/open/Condition?patient=SMART-1288992&code=http://snomed.info/sct|1201005
-// Example Conditions query - https://launch.smarthealthit.org/v/r2/fhir/Condition?patient=smart-1288992&code=http://snomed.info/sct|1201005
+//// HSPC Sandbox
 // Default patient with hypertension - SMART-1288992
 // Alternate patient w/o hypertension - SMART-7321938
+// Patient retrieval - https://api.hspconsortium.org/cdshooksdstu2/open/Patient?_id=SMART-1288992,SMART-7321938
+// Example Conditions query - https://api.hspconsortium.org/cdshooksdstu2/open/Condition?patient=SMART-1288992&code=http://snomed.info/sct|1201005
+
+//// SMART Sandbox
+// Default patient with hypertension - smart-1288992
+// Alternate patient w/o hypertension - smart-7321938
+// Patient retrieval - https://launch.smarthealthit.org/v/r2/fhir/Patient?_id=smart-1288992,smart-7321938
+// Example Conditions query - https://launch.smarthealthit.org/v/r2/fhir/Condition?patient=smart-1288992&code=http://snomed.info/sct|1201005
 
 function retrieveHypertensionConditionsAxios(fhirServer, patientId, fhirAuthorization) {
 
