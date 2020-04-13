@@ -201,6 +201,23 @@ app.post('/cds-services/patient-view-hypertension', (request, response) => {
   const patientId = request.body.context.patientId;
   const fhirAuthorization = request.body.fhirAuthorization;
 
+  // First Phase - static card
+  // const patientHypertensionCard = {
+  //   cards: [
+  //     {
+  //       summary: 'Existing condition: hypertension',
+  //       indicator: 'warning',
+  //       source: {
+  //         label: 'CDS Service Tutorial',
+  //         url: 'https://github.com/cerner/cds-services-tutorial/wiki/Exercises'
+  //       }
+  //     }
+  //   ]
+  // };
+  // response.send(JSON.stringify(patientHypertensionCard, null, 2));
+
+
+  // Second phase - retrieving conditions
   retrieveHypertensionConditionsFhirJs(fhirServer, patientId, fhirAuthorization)
     .then((conditionsBundle) => {
       if (conditionsBundle.entry && conditionsBundle.entry.length && conditionsBundle.entry[0].resource.resourceType == 'Condition') {
